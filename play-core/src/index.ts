@@ -1,3 +1,5 @@
+import { ensureLookupValue } from "./utils";
+
 type DocumentEventType = keyof DocumentEventMap;
 type DocumentEventValue = DocumentEventMap[DocumentEventType];
 type EventListenerHandler = (event: DocumentEventValue) => void;
@@ -87,7 +89,8 @@ abstract class EventArgsParser {
     return (
       typeof value === "string" ||
       value instanceof Element ||
-      value instanceof Document
+      value instanceof Document ||
+      value instanceof Window
     );
   }
 }
@@ -224,13 +227,13 @@ class Delegator {
     listener: EventListenerHandler,
     options?: boolean | EventListenerOptions
   ) {
-    if(target instanceof Window) {
-      target.addEventListener(type, listener, options)
-      return
+    if (target instanceof Window) {
+      target.addEventListener(type, listener, options);
+      return;
     }
 
-    if(target instanceof Document) {
-      target = document.documentElement
+    if (target instanceof Document) {
+      target = document.documentElement;
     }
   }
 
@@ -252,5 +255,62 @@ class Delegator {
     }
 
     return element;
+  }
+}
+
+type QueryMap = Map<string, Set<EventListenerHandler>>;
+type SelectorKind = "class" | "id" | "tag" | "data" | "complex";
+type CssSelector = { type: SelectorKind; value: string };
+
+class QueriesEventMap {
+  private readonly _queries: Record<SelectorKind, QueryMap | null> = {
+    id: null,
+    class: null,
+    tag: null,
+    data: null,
+    complex: null,
+  };
+
+  public set(query: string, value: EventListenerHandler) {
+    if (!query.trim().length) return;
+
+    const selector = this._parseQuery(query);
+    const map = ensureLookupValue(
+      this._queries,
+      selector.type,
+      () => new Map() as QueryMap
+    );
+    const listeners = ensureLookupValue(
+      map,
+      selector.value,
+      () => new Set() as Set<EventListenerHandler>
+    );
+
+    if (listeners.has(value)) return;
+    listeners.add(value);
+  }
+
+  public resolveListeners(target: Element): EventListenerHandler[] {
+    
+  }
+
+  private _parseQuery(query: string): CssSelector {
+    if (/^\.[\w-]+$/.test(query)) {
+      return { type: "class", value: query.slice(1) };
+    }
+
+    if (/^#[\w-]+$/.test(query)) {
+      return { type: "id", value: query.slice(1) };
+    }
+
+    if (/^\w+$/.test(query)) {
+      return { type: "tag", value: query.toLowerCase() };
+    }
+
+    if (/\[data-on-stream-([a-zA-Z0-9_-]+)\]/.test(query)) {
+      return { type: "data", value: query };
+    }
+
+    return { type: "complex", value: query };
   }
 }

@@ -1,12 +1,5 @@
-// export function lookupMapValue<K, V>(
-//   map: Map<K, V>,
-//   key: K,
-//   defaultValue: V
-// ): V {
-//   return map.get(key) ?? map.set(key, defaultValue).get(key) as V;
-// }
-
-import { LISTENER_TIMESTAMP, type EventListenerHandler } from ".";
+import { LISTENER_TIMESTAMP } from "./constants";
+import type { EventListenerHandler } from "./core/delegator";
 
 // export function lookupObjectValue<K extends keyof any, V>(
 //   map: { [P in K]: V },
@@ -94,4 +87,25 @@ export function mergeAllSorted<T>(
   }
 
   return result ?? [];
+}
+
+export function when<T extends PropertyKey>(
+  currentCase: T,
+  caseHandlers: Record<T, () => any> & { default?: () => any }
+) {
+  if (!caseHandlers.hasOwnProperty(currentCase)) {
+    return caseHandlers.default?.();
+  }
+
+  const caseHandler = caseHandlers[currentCase];
+
+  if (typeof caseHandler !== "function") {
+    throw new Error(
+      `Invalid case: "${JSON.stringify(
+        currentCase
+      )}". Expected a function but got ${typeof caseHandler}.`
+    );
+  }
+
+  return caseHandler();
 }

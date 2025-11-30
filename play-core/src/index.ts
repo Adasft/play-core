@@ -1,8 +1,18 @@
-import { ensureLookupValue } from "./utils";
+import {
+  ensureLookupValue,
+  getRandomId,
+  getTimestamp,
+  mergeAllSorted,
+} from "./utils";
+
+export const LISTENER_TIMESTAMP = Symbol("_timestamp");
 
 type DocumentEventType = keyof DocumentEventMap;
 type DocumentEventValue = DocumentEventMap[DocumentEventType];
-type EventListenerHandler = (event: DocumentEventValue) => void;
+export type EventListenerHandler = {
+  (event: DocumentEventValue): void;
+  [LISTENER_TIMESTAMP]?: ListenerTimestamp;
+};
 type DelegatedEventTarget = string | Element | Document | Window;
 
 type PartialBy<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
@@ -188,7 +198,7 @@ class Delegator {
     { target, type, listener, options }: EventListenerConfig,
     delegate: boolean
   ) {
-    if (delegate) {
+    if (delegate && !(target instanceof Window)) {
       this._addDelegatedEvent(target, type, listener, options);
       return;
     }
@@ -202,7 +212,7 @@ class Delegator {
     { target, type, listener }: PartialEventListenerConfig,
     delegate: boolean
   ) {
-    if (delegate) {
+    if (delegate && !(target instanceof Window)) {
       this._removeDelegatedEvent(target, type, listener);
       return;
     }
@@ -222,19 +232,28 @@ class Delegator {
   }
 
   private _addDelegatedEvent(
-    target: DelegatedEventTarget,
+    target: Exclude<DelegatedEventTarget, Window>,
     type: DocumentEventType,
     listener: EventListenerHandler,
     options?: boolean | EventListenerOptions
   ) {
-    if (target instanceof Window) {
-      target.addEventListener(type, listener, options);
-      return;
-    }
+    const query =
+      typeof target === "string" ? target : this._generateQuery(type, target);
+  }
 
+  private _generateQuery(
+    type: DocumentEventType,
+    target: Exclude<DelegatedEventTarget, string | Window>
+  ): string {
     if (target instanceof Document) {
       target = document.documentElement;
     }
+
+    if (!(target instanceof Element)) {
+      throw new Error("No element");
+    }
+
+    return RelayId.ensureAttribute(target, type);
   }
 
   private _removeDelegatedEvent(
@@ -258,6 +277,32 @@ class Delegator {
   }
 }
 
+const RelayId = Object.freeze({
+  PROPERTY: "__relayEventId",
+  PREFIX: "data-relay",
+
+  createPattern: (eventType: DocumentEventType) =>
+    new RegExp(`^${RelayId.PREFIX}-${eventType}-([a-z0-9]{10})$`),
+
+  ensureAttribute: (element: Element, eventType: DocumentEventType): string => {
+    const id = RelayId.getId(element);
+    const attr = `${RelayId.PREFIX}-${eventType}-${id}`;
+
+    if (!element.hasAttribute(attr)) {
+      element.setAttribute(attr, "");
+    }
+
+    return attr;
+  },
+
+  has: (element: Element): element is Element & { __relayEventId: string } =>
+    RelayId.PROPERTY in element,
+
+  getId: (element: Element): string =>
+    RelayId.has(element) ? element.__relayEventId : getRandomId(),
+});
+
+type ListenerTimestamp = number;
 type QueryMap = Map<string, Set<EventListenerHandler>>;
 type SelectorKind = "class" | "id" | "tag" | "data" | "complex";
 type CssSelector = { type: SelectorKind; value: string };
@@ -271,7 +316,21 @@ class QueriesEventMap {
     complex: null,
   };
 
-  public set(query: string, value: EventListenerHandler) {
+  private readonly _regExp: Record<
+    Uppercase<Exclude<SelectorKind, "complex">>,
+    RegExp
+  >;
+
+  constructor(private readonly _eventType: DocumentEventType) {
+    this._regExp = {
+      CLASS: /^\.[\w-]+$/,
+      ID: /^#[\w-]+$/,
+      TAG: /^\w+$/,
+      DATA: RelayId.createPattern(this._eventType),
+    };
+  }
+
+  public set(query: string, listener: EventListenerHandler) {
     if (!query.trim().length) return;
 
     const selector = this._parseQuery(query);
@@ -283,32 +342,77 @@ class QueriesEventMap {
     const listeners = ensureLookupValue(
       map,
       selector.value,
-      () => new Set() as Set<EventListenerHandler>
+      () => new Set<EventListenerHandler>()
     );
 
-    if (listeners.has(value)) return;
-    listeners.add(value);
+    if (listeners.has(listener)) return;
+
+    listener[LISTENER_TIMESTAMP] = performance.now();
+
+    listeners.add(listener);
   }
 
   public resolveListeners(target: Element): EventListenerHandler[] {
-    
+    const groups: EventListenerHandler[][] = [];
+
+    // id
+    const id = target.id;
+    if (id) {
+      groups.push(this._getGroup("id", id));
+    }
+
+    // tag
+    const tag = target.tagName.toLowerCase();
+    if (tag) {
+      groups.push(this._getGroup("tag", tag));
+    }
+
+    // class
+    const classList = target.classList;
+    if (classList.length) {
+      for (const className of classList) {
+        groups.push(this._getGroup("class", className));
+      }
+    }
+
+    // relay id (data)
+    if (RelayId.has(target)) {
+      const relayId = target.__relayEventId as string;
+      groups.push(this._getGroup("data", relayId));
+    }
+
+    // complex selectors
+    if (this._queries.complex) {
+      for (const [selector, handlers] of this._queries.complex) {
+        if (!target.matches(selector)) continue;
+        groups.push([...handlers]); // ya ordenado
+      }
+    }
+
+    // --- MERGE FINAL DE TODOS LOS GRUPOS ----
+    return mergeAllSorted(groups, (a, b) => getTimestamp(a) - getTimestamp(b));
+  }
+
+  private _getGroup(kind: SelectorKind, key: string): EventListenerHandler[] {
+    return [...(this._queries[kind]?.get(key) ?? [])];
   }
 
   private _parseQuery(query: string): CssSelector {
-    if (/^\.[\w-]+$/.test(query)) {
+    if (this._regExp.CLASS.test(query)) {
       return { type: "class", value: query.slice(1) };
     }
 
-    if (/^#[\w-]+$/.test(query)) {
+    if (this._regExp.ID.test(query)) {
       return { type: "id", value: query.slice(1) };
     }
 
-    if (/^\w+$/.test(query)) {
+    if (this._regExp.TAG.test(query)) {
       return { type: "tag", value: query.toLowerCase() };
     }
 
-    if (/\[data-on-stream-([a-zA-Z0-9_-]+)\]/.test(query)) {
-      return { type: "data", value: query };
+    const dataMatch = query.match(this._regExp.DATA);
+    if (dataMatch) {
+      return { type: "data", value: dataMatch[2] };
     }
 
     return { type: "complex", value: query };

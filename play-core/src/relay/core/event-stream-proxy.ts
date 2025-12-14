@@ -5,7 +5,7 @@ import type {
 import type {
   EventArgParserHandle,
   EventListenerArgs,
-} from "../parser/event-args-parser";
+} from "../args/event-args-parser";
 
 export class EventStreamProxy<
   T extends EventListenerConfig | PartialEventListenerConfig
@@ -25,11 +25,12 @@ export class EventStreamProxy<
     });
   }
 
-  public bind(target: Element) {
+  public bind(target: Element): EventStreamProxy<T> {
     EventStreamProxy._bindedTarget = target;
+    return this;
   }
 
-  public direct(...args: EventListenerArgs) {
+  public self(...args: EventListenerArgs) {
     this._resolve(false, ...args);
   }
 

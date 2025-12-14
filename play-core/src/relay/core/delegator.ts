@@ -1,9 +1,10 @@
 import { LISTENER_TIMESTAMP } from "../constants";
 import { type ListenerTimestamp } from "./queries-event-map";
 import { EventStreamProxy } from "./event-stream-proxy";
-import { AddEventArgsParser } from "../parser/add-event-args-parser";
-import { RemoveEventArgsParser } from "../parser/remove-event-args-parser";
-import { TargetIndentity } from "../event-target-identity";
+import { AddEventArgsParser } from "../args/add-event-args-parser";
+import { RemoveEventArgsParser } from "../args/remove-event-args-parser";
+import { TargetIdentity } from "../event-target-identity";
+// import { EventRegistry, EventTrigger } from "./event-trigger";
 
 export type DocumentEventType = keyof DocumentEventMap;
 type DocumentEventValue = DocumentEventMap[DocumentEventType];
@@ -36,13 +37,15 @@ export class Delegator {
     (config, delegate) => this._detachEvent(config, delegate),
     new RemoveEventArgsParser()
   );
+  // private readonly _registry: EventRegistry = new EventRegistry();
+  // private readonly _trigger: EventTrigger = new EventTrigger(this._registry);
 
   get on() {
-    return this._addEventListener;
+    return this._addEventListener.self("click", () => {});
   }
 
   get off() {
-    return this._removeEventListener;
+    return this._removeEventListener.self();
   }
 
   private _attachEvent(
@@ -104,9 +107,14 @@ export class Delegator {
       throw new Error("No element");
     }
 
-    return TargetIndentity.queryOf(target, type);
+    return TargetIdentity.associateEvent(target, type);
   }
 
+  /**
+   * Case 1: target, undefined, undefined => remove all delegated events for target
+   * Case 2: target, type, undefined => remove all delegated events for target and type
+   * Case 3: target, type, listener => remove specific delegated event
+   */
   private _removeDelegatedEvent(
     target: DelegatedEventTarget,
     type?: DocumentEventType,
